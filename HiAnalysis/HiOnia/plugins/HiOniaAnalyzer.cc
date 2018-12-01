@@ -56,6 +56,13 @@
 #include "FWCore/ServiceRegistry/interface/Service.h"
 #include "CommonTools/UtilAlgos/interface/TFileService.h"
 
+#include "MagneticField/Records/interface/IdealMagneticFieldRecord.h"
+#include "TrackingTools/PatternTools/interface/TwoTrackMinimumDistance.h"
+#include "TrackingTools/IPTools/interface/IPTools.h"
+#include "TrackingTools/PatternTools/interface/ClosestApproachInRPhi.h"
+#include "TrackingTools/TransientTrack/interface/TransientTrack.h"
+#include "TrackingTools/TransientTrack/interface/TransientTrackBuilder.h"
+#include "TrackingTools/Records/interface/TransientTrackRecord.h"
 //
 // class declaration
 //
@@ -204,10 +211,17 @@ private:
   int  Reco_QQ_NtrkPt02[Max_QQ_size];
   int  Reco_QQ_NtrkPt03[Max_QQ_size];
   int  Reco_QQ_NtrkPt04[Max_QQ_size];
+  int  Reco_QQ_NtrkPt05[Max_QQ_size];
+  int  Reco_QQ_NtrkPt07[Max_QQ_size];
+  int  Reco_QQ_NtrkPt1[Max_QQ_size];
+
+  int  Reco_QQ_Ntrk_DistVtx_lt2mm[Max_QQ_size];
+  int  Reco_QQ_Ntrk_DistPV_lt2mm[Max_QQ_size];
 
   int  Reco_QQ_NtrkDeltaR03[Max_QQ_size];
   int  Reco_QQ_NtrkDeltaR04[Max_QQ_size];
   int  Reco_QQ_NtrkDeltaR05[Max_QQ_size];
+  int  Reco_QQ_NtrkOfPV[Max_QQ_size];
 
   bool Reco_QQ_mupl_isGoodMuon[Max_QQ_size];      // Vector of isGoodMuon(TMOneStationTight) for plus muon
   bool Reco_QQ_mumi_isGoodMuon[Max_QQ_size];      // Vector of isGoodMuon(TMOneStationTight) for minus muon
@@ -284,6 +298,7 @@ private:
   int muType; // type of muon (GlbTrk=0, Trk=1, Glb=2, none=-1) 
 
   int Reco_trk_size;           // Number of reconstructed tracks
+  int trk_size;
   int Reco_trk_charge[Max_trk_size];  // Vector of charge of tracks
   float Reco_trk_dxyError[Max_trk_size];
   float Reco_trk_dzError[Max_trk_size];
@@ -465,6 +480,7 @@ private:
   bool hltPrescaleInit;
 
   const edm::ParameterSet _iConfig;
+  edm::ESHandle<TransientTrackBuilder> theTTBuilder;
 };
 
 //
@@ -533,7 +549,7 @@ HiOniaAnalyzer::HiOniaAnalyzer(const edm::ParameterSet& iConfig):
   _isMC(iConfig.getUntrackedParameter<bool>("isMC",false) ),
   _isPromptMC(iConfig.getUntrackedParameter<bool>("isPromptMC",true) ),
   _useEvtPlane(iConfig.getUntrackedParameter<bool>("useEvtPlane",false) ),
-  _useGeTracks(iConfig.getUntrackedParameter<bool>("useGeTracks",false) ),
+  _useGeTracks(iConfig.getUntrackedParameter<bool>("useGeTracks",true) ),
   _oniaPDG(iConfig.getParameter<int>("oniaPDG")),
   hltPrescaleProvider(iConfig, consumesCollector(), *this),
   _iConfig(iConfig)
@@ -660,6 +676,7 @@ HiOniaAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 
   //hZVtx->Fill(zVtx);
   //hPileUp->Fill(nPV);
+  iSetup.get<TransientTrackRecord>().get("TransientTrackBuilder",theTTBuilder);
 
   this->hltReport(iEvent, iSetup);
 
@@ -821,7 +838,7 @@ HiOniaAnalyzer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
   maxCaloTowerHFeta = float(*evHandleMaxHFeta);
   maxCaloTowerHFphi = float(*evHandleMaxHFphi);
 
-  if (_fillTree)
+  if (_fillTree && Reco_QQ_size > 0)
     myTree->Fill();
 
   return;
@@ -1196,6 +1213,16 @@ HiOniaAnalyzer::fillTreeJpsi(int iSign, int count) {
   Reco_QQ_NtrkPt02[Reco_QQ_size]=0;
   Reco_QQ_NtrkPt03[Reco_QQ_size]=0;
   Reco_QQ_NtrkPt04[Reco_QQ_size]=0;
+  Reco_QQ_NtrkPt05[Reco_QQ_size]=0;
+  Reco_QQ_NtrkPt07[Reco_QQ_size]=0;
+  Reco_QQ_NtrkPt1[Reco_QQ_size]=0;
+  
+  Reco_QQ_Ntrk_DistPV_lt2mm[Reco_QQ_size]=0;
+  Reco_QQ_Ntrk_DistVtx_lt2mm[Reco_QQ_size]=0;
+
+  trk_size = 0;
+  
+  Reco_QQ_NtrkOfPV[Reco_QQ_size] = aJpsiCand->userInt("countTksOfPV");
 
   if (_useGeTracks && collTracks.isValid()) {
     for(std::vector<reco::Track>::const_iterator it=collTracks->begin();
@@ -1213,7 +1240,14 @@ HiOniaAnalyzer::fillTreeJpsi(int iSign, int count) {
       //                << " ratio: " << dxysigma / sqrt( pow(track->dxyError(),2) + pow(RefVtx_xError,2) + pow(RefVtx_yError,2) )
       //                << " best: "
       //                << std::endl;
-      
+      reco::TransientTrack tt = theTTBuilder->build(track);
+      pair<bool,Measurement1D> tkPVdist = IPTools::absoluteImpactParameter3D(tt,*aJpsiCand->userData<reco::Vertex>("commonVertex"));
+      if ( tkPVdist.second.value() < 0.2 && track->pt()>0.2 && track->qualityByName("highPurity")) 
+        Reco_QQ_Ntrk_DistVtx_lt2mm[Reco_QQ_size]++;
+
+      tkPVdist = IPTools::absoluteImpactParameter3D(tt,*aJpsiCand->userData<reco::Vertex>("muonlessPV"));
+      if ( tkPVdist.second.value() < 0.2 && track->pt()>0.2 && track->qualityByName("highPurity")) 
+        Reco_QQ_Ntrk_DistPV_lt2mm[Reco_QQ_size]++;
 
        if (track->qualityByName("highPurity") &&
            track->pt()>0.2 && fabs(track->eta())<2.4 &&
@@ -1222,6 +1256,9 @@ HiOniaAnalyzer::fillTreeJpsi(int iSign, int count) {
          
          Reco_QQ_NtrkPt02[Reco_QQ_size]++;
          if (track->pt()>0.3) Reco_QQ_NtrkPt03[Reco_QQ_size]++;
+         if (track->pt()>0.5) Reco_QQ_NtrkPt05[Reco_QQ_size]++;
+         if (track->pt()>0.7) Reco_QQ_NtrkPt07[Reco_QQ_size]++;
+         if (track->pt()>1.0) Reco_QQ_NtrkPt1[Reco_QQ_size]++;
          if (track->pt()>0.4) {
            Reco_QQ_NtrkPt04[Reco_QQ_size]++;
 
@@ -1458,13 +1495,13 @@ HiOniaAnalyzer::theBestQQ(int sign) {
 bool
 HiOniaAnalyzer::isMuonInAccept(const pat::Muon* aMuon, const std::string muonType) {
   if (muonType == (std::string)("GLB")) {
-    return (fabs(aMuon->eta()) < 2.4 && aMuon->pt() > 1.0 );
+    return (fabs(aMuon->eta()) < 2.5 );
             //((fabs(aMuon->eta()) < 1.2 && aMuon->pt() >= 3.5) ||
              //(1.2 <= fabs(aMuon->eta()) && fabs(aMuon->eta()) < 2.1 && aMuon->pt() >= 5.77-1.89*fabs(aMuon->eta())) ||
              //(2.1 <= fabs(aMuon->eta()) && aMuon->pt() >= 1.8)));
   }
   else if (muonType == (std::string)("TRK")) {
-    return (fabs(aMuon->eta()) < 2.4 && aMuon->pt() > 1.0 );
+    return (fabs(aMuon->eta()) < 2.5 );
             //((fabs(aMuon->eta()) < 1.3 && aMuon->pt() >= 3.3) ||
              //(1.3 <= fabs(aMuon->eta()) && fabs(aMuon->eta()) < 2.2 && aMuon->p() >= 2.9) ||
              //(2.2 <= fabs(aMuon->eta()) && aMuon->pt() >= 0.8)));
@@ -1707,14 +1744,14 @@ HiOniaAnalyzer::fillRecoTracks()
         
         Reco_trk_charge[Reco_trk_size] = track->charge();
          
-        new((*Reco_trk_vtx)[Reco_trk_size])TVector3(track->vx(),track->vy(),track->vz());
+        //new((*Reco_trk_vtx)[Reco_trk_size])TVector3(track->vx(),track->vy(),track->vz());
 
         Reco_trk_dxyError[Reco_trk_size] = track->dxyError();
         Reco_trk_dzError[Reco_trk_size] = track->dzError();
 
         TLorentzVector vTrack;
         vTrack.SetPtEtaPhiM(track->pt(), track->eta(), track->phi(), 0.13957018);
-        new((*Reco_trk_4mom)[Reco_trk_size])TLorentzVector(vTrack);
+        //new((*Reco_trk_4mom)[Reco_trk_size])TLorentzVector(vTrack);
         Reco_trk_size++;
       }
     }
@@ -1996,19 +2033,26 @@ HiOniaAnalyzer::InitTree()
   myTree->Branch("Reco_mu_charge", Reco_mu_charge,   "Reco_mu_charge[Reco_mu_size]/I");
   myTree->Branch("Reco_mu_4mom", "TClonesArray", &Reco_mu_4mom, 32000, 0);
   myTree->Branch("Reco_mu_trig", Reco_mu_trig,   "Reco_mu_trig[Reco_mu_size]/l");
+    
+  myTree->Branch("Reco_QQ_NtrkOfPV", Reco_QQ_NtrkOfPV, "Reco_QQ_NtrkOfPV[Reco_QQ_size]/I");
 
   if (_useGeTracks && _fillRecoTracks) {
+    myTree->Branch("Reco_QQ_Ntrk_DistPV_lt2mm", Reco_QQ_Ntrk_DistPV_lt2mm, "Reco_QQ_Ntrk_DistPV_lt2mm[Reco_QQ_size]/I");
+    myTree->Branch("Reco_QQ_Ntrk_DistVtx_lt2mm", Reco_QQ_Ntrk_DistVtx_lt2mm, "Reco_QQ_Ntrk_DistVtx_lt2mm[Reco_QQ_size]/I");
     myTree->Branch("Reco_QQ_NtrkPt02", Reco_QQ_NtrkPt02, "Reco_QQ_NtrkPt02[Reco_QQ_size]/I");
     myTree->Branch("Reco_QQ_NtrkPt03", Reco_QQ_NtrkPt03, "Reco_QQ_NtrkPt03[Reco_QQ_size]/I");
     myTree->Branch("Reco_QQ_NtrkPt04", Reco_QQ_NtrkPt04, "Reco_QQ_NtrkPt04[Reco_QQ_size]/I");
+    myTree->Branch("Reco_QQ_NtrkPt05", Reco_QQ_NtrkPt05, "Reco_QQ_NtrkPt05[Reco_QQ_size]/I");
+    myTree->Branch("Reco_QQ_NtrkPt07", Reco_QQ_NtrkPt07, "Reco_QQ_NtrkPt07[Reco_QQ_size]/I");
+    myTree->Branch("Reco_QQ_NtrkPt1", Reco_QQ_NtrkPt1, "Reco_QQ_NtrkPt1[Reco_QQ_size]/I");
     myTree->Branch("Reco_QQ_NtrkDeltaR03", Reco_QQ_NtrkDeltaR03, "Reco_QQ_NtrkDeltaR03[Reco_QQ_size]/I");
     myTree->Branch("Reco_QQ_NtrkDeltaR04", Reco_QQ_NtrkDeltaR04, "Reco_QQ_NtrkDeltaR04[Reco_QQ_size]/I");
     myTree->Branch("Reco_QQ_NtrkDeltaR05", Reco_QQ_NtrkDeltaR05, "Reco_QQ_NtrkDeltaR05[Reco_QQ_size]/I");
 
     myTree->Branch("Reco_trk_size", &Reco_trk_size,  "Reco_trk_size/I");
     myTree->Branch("Reco_trk_charge", Reco_trk_charge,   "Reco_trk_charge[Reco_trk_size]/I");
-    myTree->Branch("Reco_trk_4mom", "TClonesArray", &Reco_trk_4mom, 32000, 0);
-    myTree->Branch("Reco_trk_vtx", "TClonesArray", &Reco_trk_vtx, 32000, 0);
+    //myTree->Branch("Reco_trk_4mom", "TClonesArray", &Reco_trk_4mom, 32000, 0);
+    //myTree->Branch("Reco_trk_vtx", "TClonesArray", &Reco_trk_vtx, 32000, 0);
     myTree->Branch("Reco_trk_dxyError", Reco_trk_dxyError, "Reco_trk_dxyError[Reco_trk_size]/F");
     myTree->Branch("Reco_trk_dzError", Reco_trk_dzError, "Reco_trk_dzError[Reco_trk_size]/F");
   }
